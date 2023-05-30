@@ -39,6 +39,7 @@ class GoHelper(bn.plugin.BackgroundTaskThread):
         self.bv = bv
         self.br = bn.binaryview.BinaryReader(bv)
         self.ptr_size = bv.platform.arch.address_size
+        self.go_sub_ver = 12
 
     def get_section_by_name(self, section_name):
         if section_name in self.bv.sections:
@@ -79,6 +80,39 @@ class GoHelper(bn.plugin.BackgroundTaskThread):
 
 
 class FunctionRenamer(GoHelper):
+    def get_go_version(self):
+        GO_VERSION_PATTERN="go1(\.\d+(\.\d+)?)?(beta\d+|rc\d+)?";
+        pattern = re.compile(GO_VERSION_PATTERN)
+        
+        all_strings = self.bv.strings
+
+        go_version = None
+        for s in all_strings:
+            m = re.search(pattern, s.value)
+            if m == None:
+                continue
+            go_version = m.group(0)
+            break
+        
+        self.sub_version = int(go_version.split('.')[1])
+
+    def pclntab_magic_of_version(self):
+        # https://go.dev/src/debug/gosym/pclntab.go
+        patterns = [
+            b"\xfb\xff\xff\xff\x00\x00",
+            b"\xfa\xff\xff\xff\x00\x00",
+            b"\xf0\xff\xff\xff\x00\x00",
+            b"\xf1\xff\xff\xff\x00\x00",]
+        
+        if self.sub_version < 16:
+            return patterns[0]
+        if self.sub_version < 18:
+            return patterns[1]
+        if self.sub_version < 20:
+            return patterns[2]
+        else:
+            return patterns[3]
+
     def rename_functions(self):
         renamed = 0
         log_info("renaming functions based on .gopclntab section")
@@ -86,7 +120,8 @@ class FunctionRenamer(GoHelper):
         gopclntab = self.get_section_by_name(".gopclntab")
 
         if gopclntab is None:
-            pattern = b"\xfb\xff\xff\xff\x00\x00"
+            self.get_go_version()
+            pattern = self.pclntab_magic_of_version()
             base_addr = self.bv.find_next_data(0, pattern)
 
             if base_addr is None:
